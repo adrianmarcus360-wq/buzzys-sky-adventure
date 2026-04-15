@@ -54,6 +54,104 @@ function say(t){
   speechSynthesis.cancel();speechSynthesis.speak(u);
 }
 
+// ─── AUDIO ENGINE ───────────────────────────────────────────────────────────
+let actx=null,masterG=null,muted=false,seqTimer=null,seqStep=0,seqNext=0;
+const BPM=126,STEP=60/BPM/2; // 8th-note step
+
+// Note frequencies
+const C4=261.63,D4=293.66,E4=329.63,F4=349.23,G4=392.00,A4=440.00,
+      C5=523.25,D5=587.33,E5=659.25,G5=783.99;
+
+// Main melody: Twinkle Twinkle – kids immediately recognise it
+const MELODY=[
+  C4,C4,G4,G4, A4,A4,G4,0,
+  F4,F4,E4,E4, D4,D4,C4,0,
+  G4,G4,F4,F4, E4,E4,D4,0,
+  G4,G4,F4,F4, E4,E4,D4,0,
+];
+
+function startAudio(){
+  if(actx)return;
+  actx=new(window.AudioContext||window.webkitAudioContext)();
+  masterG=actx.createGain();masterG.gain.value=0.45;masterG.connect(actx.destination);
+}
+function resumeAudio(){if(actx&&actx.state==='suspended')actx.resume();}
+
+function kick(t){
+  const o=actx.createOscillator(),g=actx.createGain();
+  o.connect(g);g.connect(masterG);
+  o.frequency.setValueAtTime(130,t);o.frequency.exponentialRampToValueAtTime(0.01,t+0.42);
+  g.gain.setValueAtTime(1.0,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.42);
+  o.start(t);o.stop(t+0.43);
+}
+function snare(t){
+  const sr=actx.sampleRate,buf=actx.createBuffer(1,sr*0.18,sr);
+  const d=buf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  const n=actx.createBufferSource(),f=actx.createBiquadFilter(),g=actx.createGain();
+  n.buffer=buf;f.type='bandpass';f.frequency.value=1100;f.Q.value=0.6;
+  n.connect(f);f.connect(g);g.connect(masterG);
+  g.gain.setValueAtTime(0.55,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.13);
+  n.start(t);n.stop(t+0.18);
+}
+function hat(t,vol=0.1){
+  const sr=actx.sampleRate,buf=actx.createBuffer(1,sr*0.03,sr);
+  const d=buf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  const n=actx.createBufferSource(),f=actx.createBiquadFilter(),g=actx.createGain();
+  n.buffer=buf;f.type='highpass';f.frequency.value=8000;
+  n.connect(f);f.connect(g);g.connect(masterG);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.03);
+  n.start(t);n.stop(t+0.04);
+}
+function playNote(freq,t,dur){
+  if(!freq)return;
+  const o=actx.createOscillator(),g=actx.createGain();
+  o.type='square';o.frequency.value=freq;
+  o.connect(g);g.connect(masterG);
+  g.gain.setValueAtTime(0.13,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.start(t);o.stop(t+dur+0.01);
+}
+// Short collect jingle (ascending 3-note ding)
+function jingle(t){
+  [E5,G5,C5+G5/2].forEach((f,i)=>playNote(f,t+i*0.07,0.12));
+}
+// Level complete fanfare
+function fanfare(){
+  if(!actx)return;
+  const t=actx.currentTime;
+  [C4,E4,G4,C5].forEach((f,i)=>playNote(f,t+i*0.12,0.22));
+}
+
+function schedStep(t,s){
+  const step=s%8;
+  // Drums
+  if(step===0||step===4)kick(t);
+  if(step===2||step===6)snare(t);
+  hat(t,step%2===0?0.12:0.06);
+  // Melody (one note per step)
+  playNote(MELODY[s%MELODY.length],t,STEP*0.82);
+}
+function runSeq(){
+  if(!actx||!seqTimer)return;
+  if(actx.state==='suspended'){actx.resume();return;}
+  while(seqNext<actx.currentTime+0.12){
+    schedStep(seqNext,seqStep);
+    seqStep++;seqNext+=STEP;
+  }
+}
+function startMusic(){
+  if(!actx||seqTimer)return;
+  seqNext=actx.currentTime+0.06;
+  seqTimer=setInterval(runSeq,25);
+}
+function stopMusic(){
+  if(seqTimer){clearInterval(seqTimer);seqTimer=null;}
+}
+function toggleMute(){
+  muted=!muted;
+  if(masterG)masterG.gain.value=muted?0:0.45;
+}
+// ─── END AUDIO ──────────────────────────────────────────────────────────────
+
 // Rounded rect path
 function rr(x,y,w,h,r){
   cx.beginPath();cx.moveTo(x+r,y);cx.lineTo(x+w-r,y);cx.quadraticCurveTo(x+w,y,x+w,y+r);
@@ -77,23 +175,17 @@ function drawDrone(x,y,rot,vy){
   cx.save();cx.translate(x,y);
   const tilt=Math.max(-0.3,Math.min(0.3,(vy||0)*0.035));
   cx.rotate(tilt);
-  // shadow
   cx.fillStyle='rgba(0,0,0,0.15)';cx.beginPath();cx.ellipse(0,22,22,5,0,0,Math.PI*2);cx.fill();
-  // arms
   cx.strokeStyle='#546E7A';cx.lineWidth=3;
   cx.beginPath();cx.moveTo(-20,-9);cx.lineTo(-28,-19);cx.stroke();
   cx.beginPath();cx.moveTo(20,-9);cx.lineTo(28,-19);cx.stroke();
-  // rotors
   drawRotor(-28,-20,rot);drawRotor(28,-20,-rot);
-  // body
   cx.fillStyle='#29B6F6';rr(-24,-11,48,22,8);cx.fill();
   cx.fillStyle='#0277BD';rr(-14,-6,28,12,4);cx.fill();
-  // eye
   cx.fillStyle='#00E676';cx.beginPath();cx.arc(14,0,4,0,Math.PI*2);cx.fill();
   cx.fillStyle='#fff';cx.beginPath();cx.arc(15.5,-1,1.5,0,Math.PI*2);cx.fill();
   cx.restore();
 }
-
 function drawRotor(x,y,a){
   cx.save();cx.translate(x,y);cx.rotate(a);
   cx.strokeStyle='rgba(255,255,255,0.9)';cx.lineWidth=3;cx.lineCap='round';
@@ -173,7 +265,10 @@ function updateGems(){
       burst(g.x,g.y,g.color);
       flashLbl=g.label;flashT=70;
       say(g.label);
-      if(collected>=5)setTimeout(()=>{gs=ST.DONE;say('Amazing! Level complete!');},200);
+      if(actx)jingle(actx.currentTime);
+      if(collected>=5){setTimeout(()=>{
+        gs=ST.DONE;stopMusic();fanfare();say('Amazing! Level complete!');
+      },200);}
       return false;
     }
     return true;
@@ -223,7 +318,7 @@ function updateDrone(){
 function hitDrone(){
   if(DR.iF>0)return;
   lives--;DR.iF=100;DR.vy=-5;
-  if(lives<=0){gs=ST.OVER;say('Oh no! Try again!');}
+  if(lives<=0){gs=ST.OVER;stopMusic();say('Oh no! Try again!');}
   else say('Oops!');
 }
 
@@ -238,10 +333,15 @@ function drawHUD(){
   cx.fillStyle='#fff';cx.font='bold 18px Arial';cx.textAlign='center';
   cx.fillText('Level '+lvl,W/2,29);
 
-  cx.fillStyle='rgba(0,0,0,0.4)';rr(W-110,10,100,38,10);cx.fill();
+  cx.fillStyle='rgba(0,0,0,0.4)';rr(W-155,10,100,38,10);cx.fill();
   cx.font='22px Arial';cx.textAlign='center';
   let h='';for(let i=0;i<Math.max(0,lives);i++)h+='❤️';
-  cx.fillText(h,W-60,29);
+  cx.fillText(h,W-105,29);
+
+  // Mute button
+  cx.fillStyle='rgba(0,0,0,0.4)';rr(W-46,10,38,38,10);cx.fill();
+  cx.font='22px Arial';cx.textAlign='center';cx.textBaseline='middle';
+  cx.fillText(muted?'🔇':'🔊',W-27,29);
 
   cx.fillStyle='rgba(0,0,0,0.35)';rr(10,57,185,17,5);cx.fill();
   cx.fillStyle=l.ic;
@@ -303,7 +403,6 @@ function drawTitle(){
 // Level complete screen
 function drawDone(){
   cx.fillStyle='rgba(0,0,0,0.6)';cx.fillRect(0,0,W,H);
-  // confetti
   if(frame%3===0){
     const colors=['#FFD700','#FF6B9D','#4ECDC4','#A29BFE','#FD79A8'];
     burst(Math.random()*W,Math.random()*H/2,colors[Math.floor(Math.random()*colors.length)]);
@@ -335,6 +434,7 @@ function drawOver(){
 function resetAll(){
   DR.reset();pillars=[];gems=[];parts=[];
   pillarT=0;gemT=0;score=0;lives=3;collected=0;lvl=1;flashT=0;
+  stopMusic();
 }
 function nextLevel(){
   if(lvl>=LVS.length){resetAll();gs=ST.TITLE;return;}
@@ -342,20 +442,37 @@ function nextLevel(){
   pillarT=0;gemT=0;collected=0;flashT=0;
   lives=Math.min(3,lives+1);
   gs=ST.PLAY;
+  seqStep=0; // reset melody for fresh feel
+  startMusic();
   say('Level '+lvl+'! '+lv().name);
 }
 
-// Input
+// Input – also handles mute button tap
 function onInput(e){
   e.preventDefault();
-  if(gs===ST.TITLE){gs=ST.PLAY;say('Fly Buzzy fly!');return;}
+  // Check mute button hit (top-right corner, scaled)
+  const touches=e.changedTouches||e.touches;
+  const raw=touches?touches[0]:e;
+  if(raw){
+    const rx=(raw.clientX-(window.innerWidth-W*sc)/2)/sc;
+    const ry=(raw.clientY-(window.innerHeight-H*sc)/2)/sc;
+    if(rx>W-46&&rx<W-8&&ry>10&&ry<48){toggleMute();return;}
+  }
+  if(gs===ST.TITLE){
+    startAudio();resumeAudio();
+    gs=ST.PLAY;seqStep=0;startMusic();
+    say('Fly Buzzy fly!');return;
+  }
   if(gs===ST.PLAY){DR.flap();return;}
   if(gs===ST.DONE){nextLevel();return;}
   if(gs===ST.OVER){resetAll();gs=ST.TITLE;return;}
 }
 cv.addEventListener('click',onInput);
 cv.addEventListener('touchstart',onInput,{passive:false});
-document.addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='ArrowUp')onInput(e);});
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='ArrowUp')onInput(e);
+  if(e.code==='KeyM')toggleMute();
+});
 
 // Loop
 function loop(){
